@@ -1,3 +1,4 @@
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -94,6 +95,19 @@ io.on('connection', (socket) => {
     } catch (error) {
       console.error('Join room error:', error);
       socket.emit('roomError', 'Failed to join room');
+    }
+  });
+
+  // Chat Message Handler
+  socket.on('sendChatMessage', ({ roomId, username, message }) => {
+    try {
+      io.to(roomId).emit('receiveChatMessage', {
+        username,
+        message,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Chat message error:', error);
     }
   });
 
