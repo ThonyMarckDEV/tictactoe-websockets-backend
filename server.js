@@ -153,6 +153,50 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('requestRematch', ({ roomId, username }) => {
+    try {
+      const room = gameRooms.get(roomId);
+      if (!room) return;
+  
+      // Initialize rematch tracking if it doesn't exist
+      if (!room.rematchRequests) {
+        room.rematchRequests = new Set();
+        room.rematchPlayers = [];
+      }
+  
+      // Check if this player has already requested rematch
+      if (!room.rematchRequests.has(socket.id)) {
+        // Add current player to rematch requests
+        room.rematchRequests.add(socket.id);
+        room.rematchPlayers.push(username);
+  
+        // Update rematch status
+        const rematchStatus = {
+          current: room.rematchRequests.size,
+          total: 2,
+          players: room.rematchPlayers
+        };
+  
+        // Notify all players about rematch status
+        io.to(roomId).emit('rematchUpdate', rematchStatus);
+  
+        // If both players accepted
+        if (room.rematchRequests.size === 2) {
+          // Reset game state
+          room.board = new Array(9).fill(null);
+          room.status = 'playing';
+          room.currentPlayerIndex = 0;
+          room.rematchRequests.clear();
+          room.rematchPlayers = [];
+  
+          // Notify start of new game
+          io.to(roomId).emit('gameStarted', room);
+        }
+      }
+    } catch (error) {
+      console.error('Rematch error:', error);
+    }
+  });
 
   // Modify existing disconnect handler
   socket.on('disconnect', () => {
