@@ -1,13 +1,9 @@
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// Create Express app
 const app = express();
-
-// Configure CORS
 const corsOptions = {
   origin: '*',
   methods: ['GET', 'POST'],
@@ -15,17 +11,13 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// Create HTTP server
 const server = http.createServer(app);
-
-// Configure Socket.IO
 const io = new Server(server, {
   cors: corsOptions,
   pingTimeout: 60000,
   pingInterval: 25000
 });
 
-// Simplified game room management
 const gameRooms = new Map();
 
 io.on('connection', (socket) => {
@@ -161,7 +153,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Disconnect Handler
+
+  // Modify existing disconnect handler
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
     
@@ -169,12 +162,24 @@ io.on('connection', (socket) => {
       const playerIndex = room.players.findIndex(p => p.id === socket.id);
       
       if (playerIndex !== -1) {
-        gameRooms.delete(roomId);
-        io.to(roomId).emit('playerLeft');
+        // Remove the player from the room
+        room.players.splice(playerIndex, 1);
+        
+        if (room.players.length === 0) {
+          // Remove the room if empty
+          gameRooms.delete(roomId);
+        } else {
+          // Notify remaining player about disconnection
+          io.to(roomId).emit('playerLeft', { 
+            username: room.players[0].username,
+            intentionalExit: false 
+          });
+        }
         break;
       }
     }
   });
+
 });
 
 // Start server
