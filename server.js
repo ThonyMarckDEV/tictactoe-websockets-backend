@@ -20,7 +20,7 @@ const pool = mysql.createPool({
   port: process.env.DB_PORT || 3306,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
 });
 
 // Test database connection on startup
@@ -49,25 +49,25 @@ async function getPlayerData(idUsuario) {
       'SELECT u.user_code, d.nombre, d.perfil FROM usuarios u LEFT JOIN datos d ON u.idDatos = d.idDatos WHERE u.idUsuario = ?',
       [idUsuario]
     );
-    
+
     if (result.length > 0) {
       return {
         id: idUsuario,
         name: result[0].nombre || 'Player',
-        picture: result[0].perfil || 'https://placehold.co/50x50'
+        picture: result[0].perfil || 'https://placehold.co/50x50',
       };
     }
     return {
       id: idUsuario,
       name: 'Player',
-      picture: 'https://placehold.co/50x50'
+      picture: 'https://placehold.co/50x50',
     };
   } catch (error) {
     console.error('Error getting player data:', error);
     return {
       id: idUsuario,
       name: 'Player',
-      picture: 'https://placehold.co/50x50'
+      picture: 'https://placehold.co/50x50',
     };
   }
 }
@@ -75,19 +75,16 @@ async function getPlayerData(idUsuario) {
 // Function to send player data to both players
 async function sendPlayerDataToRoom(room, idPartida) {
   const player1Data = await getPlayerData(room.player1);
-  const player2Data = room.player2 ? await getPlayerData(room.player2) : {
-    id: null,
-    name: 'Esperando oponente...',
-    picture: 'https://placehold.co/50x50'
-  };
+  const player2Data = room.player2
+    ? await getPlayerData(room.player2)
+    : { id: null, name: 'Esperando oponente...', picture: 'https://placehold.co/50x50' };
 
   const playerDataMessage = JSON.stringify({
     type: 'playerData',
     player1: player1Data,
-    player2: player2Data
+    player2: player2Data,
   });
 
-  // Send to both players
   if (room.player1Ws && room.player1Ws.readyState === WebSocket.OPEN) {
     room.player1Ws.send(playerDataMessage);
   }
@@ -97,17 +94,17 @@ async function sendPlayerDataToRoom(room, idPartida) {
 }
 
 // Handle WebSocket connections
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
+      console.log('Received WebSocket message:', data); // Debug log
 
       if (data.type === 'join') {
         const { idPartida, idUsuario } = data;
         let room = gameRooms.get(idPartida);
 
         if (!room) {
-          // Create new room if it doesn't exist
           room = {
             player1: idUsuario,
             player1Ws: ws,
@@ -115,40 +112,34 @@ wss.on('connection', (ws, req) => {
             player2Ws: null,
             board: Array(9).fill(null),
             isXNext: true,
-            status: 'waiting'
+            status: 'waiting',
           };
           gameRooms.set(idPartida, room);
 
-          // Create partida in database
           await pool.query(
             'INSERT INTO partidas (idPartida, juego, idUsuario, estado, created_at, updated_at) VALUES (?, ?, ?, 1, NOW(), NOW())',
             [idPartida, 'Triki', idUsuario]
           );
 
-          // Send initial player data
           await sendPlayerDataToRoom(room, idPartida);
         } else if (room.player1 !== idUsuario && !room.player2) {
-          // Join as second player
           room.player2 = idUsuario;
           room.player2Ws = ws;
           room.status = 'playing';
 
-          // Update partida with idAmigo
           await pool.query(
             'UPDATE partidas SET idAmigo = ?, updated_at = NOW() WHERE idPartida = ?',
             [idUsuario, idPartida]
           );
 
-          // Send updated player data to both players
           await sendPlayerDataToRoom(room, idPartida);
 
-          // Notify both players to start the game
-          const startMessage = JSON.stringify({ 
-            type: 'start', 
-            board: room.board, 
-            isXNext: room.isXNext 
+          const startMessage = JSON.stringify({
+            type: 'start',
+            board: room.board,
+            isXNext: room.isXNext,
           });
-          
+
           if (room.player1Ws && room.player1Ws.readyState === WebSocket.OPEN) {
             room.player1Ws.send(startMessage);
           }
@@ -156,22 +147,20 @@ wss.on('connection', (ws, req) => {
             room.player2Ws.send(startMessage);
           }
         } else if (room.player1 === idUsuario || room.player2 === idUsuario) {
-          // Player reconnecting
           if (room.player1 === idUsuario) {
             room.player1Ws = ws;
           } else {
             room.player2Ws = ws;
           }
-          
-          // Send current player data and game state
+
           await sendPlayerDataToRoom(room, idPartida);
-          
+
           const gameStateMessage = JSON.stringify({
             type: room.status === 'playing' ? 'start' : 'waiting',
             board: room.board,
-            isXNext: room.isXNext
+            isXNext: room.isXNext,
           });
-          
+
           ws.send(gameStateMessage);
         }
       }
@@ -181,19 +170,19 @@ wss.on('connection', (ws, req) => {
         const room = gameRooms.get(idPartida);
 
         if (!room || room.status !== 'playing') return;
-        if ((room.isXNext && idUsuario !== room.player1) || (!room.isXNext && idUsuario !== room.player2)) return;
+        if ((room.isXNext && idUsuario !== room.player1) || (!room.isXNext && idUsuario !== room.player2))
+          return;
 
         if (!room.board[index]) {
           room.board[index] = room.isXNext ? 'X' : 'O';
           room.isXNext = !room.isXNext;
 
-          // Broadcast move to both players
-          const moveMessage = JSON.stringify({ 
-            type: 'move', 
-            board: room.board, 
-            isXNext: room.isXNext 
+          const moveMessage = JSON.stringify({
+            type: 'move',
+            board: room.board,
+            isXNext: room.isXNext,
           });
-          
+
           if (room.player1Ws && room.player1Ws.readyState === WebSocket.OPEN) {
             room.player1Ws.send(moveMessage);
           }
@@ -201,24 +190,22 @@ wss.on('connection', (ws, req) => {
             room.player2Ws.send(moveMessage);
           }
 
-          // Check for winner
           const winner = calculateWinner(room.board);
           if (winner || !room.board.includes(null)) {
             room.status = 'finished';
             const idGanador = winner ? (winner === 'X' ? room.player1 : room.player2) : null;
-            
-            // Update database
+
             await pool.query(
               'UPDATE partidas SET idGanador = ?, estado = 2, updated_at = NOW() WHERE idPartida = ?',
               [idGanador, idPartida]
             );
 
-            const gameOverMessage = JSON.stringify({ 
-              type: 'gameOver', 
-              winner, 
-              idGanador 
+            const gameOverMessage = JSON.stringify({
+              type: 'gameOver',
+              winner,
+              idGanador,
             });
-            
+
             if (room.player1Ws && room.player1Ws.readyState === WebSocket.OPEN) {
               room.player1Ws.send(gameOverMessage);
             }
@@ -230,25 +217,30 @@ wss.on('connection', (ws, req) => {
       }
 
       if (data.type === 'chat') {
-        const { idPartida, message, user } = data;
+        const { idPartida, message } = data;
         const room = gameRooms.get(idPartida);
-        if (room) {
-          const chatMessage = { 
-            user: user, 
-            text: message, 
-            timestamp: new Date().toISOString() 
+        if (room && message && message.userId) {
+          const playerData = await getPlayerData(message.userId);
+          const chatMessage = {
+            text: message.text,
+            user: playerData.name,
+            userId: message.userId,
+            picture: playerData.picture,
+            timestamp: new Date().toISOString(),
           };
-          const messageStr = JSON.stringify({ 
-            type: 'chat', 
-            message: chatMessage 
+          const messageStr = JSON.stringify({
+            type: 'chat',
+            message: chatMessage,
           });
-          
+
           if (room.player1Ws && room.player1Ws.readyState === WebSocket.OPEN) {
             room.player1Ws.send(messageStr);
           }
           if (room.player2Ws && room.player2Ws.readyState === WebSocket.OPEN) {
             room.player2Ws.send(messageStr);
           }
+        } else {
+          console.warn('Invalid chat message or room not found:', { idPartida, message });
         }
       }
     } catch (error) {
@@ -263,22 +255,22 @@ wss.on('connection', (ws, req) => {
           const disconnectedPlayer = room.player1Ws === ws ? room.player1 : room.player2;
           const remainingPlayer = room.player1Ws === ws ? room.player2 : room.player1;
           const remainingWs = room.player1Ws === ws ? room.player2Ws : room.player1Ws;
-          
+
           if (room.status === 'playing') {
-            // Update database with winner (the remaining player)
             await pool.query(
               'UPDATE partidas SET idGanador = ?, estado = 2, updated_at = NOW() WHERE idPartida = ?',
               [remainingPlayer, idPartida]
             );
 
-            // Notify remaining player
             if (remainingWs && remainingWs.readyState === WebSocket.OPEN) {
-              remainingWs.send(JSON.stringify({ 
-                type: 'gameOver', 
-                winner: remainingPlayer === room.player1 ? 'X' : 'O', 
-                idGanador: remainingPlayer,
-                reason: 'opponent_disconnected'
-              }));
+              remainingWs.send(
+                JSON.stringify({
+                  type: 'gameOver',
+                  winner: remainingPlayer === room.player1 ? 'X' : 'O',
+                  idGanador: remainingPlayer,
+                  reason: 'opponent_disconnected',
+                })
+              );
             }
           }
           gameRooms.delete(idPartida);
@@ -291,12 +283,17 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Calculate winner (same logic as frontend)
+// Calculate winner
 function calculateWinner(board) {
   const lines = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6]
+    [0, 1, 2],
+    [3, 4, 5],
+    [6, 7, 8],
+    [0, 3, 6],
+    [1, 4, 7],
+    [2, 5, 8],
+    [0, 4, 8],
+    [2, 4, 6],
   ];
   for (let [a, b, c] of lines) {
     if (board[a] && board[a] === board[b] && board[a] === board[c]) {
