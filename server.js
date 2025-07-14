@@ -101,15 +101,19 @@ app.post('/api/create-game', async (req, res) => {
       return res.status(400).json({ error: 'idUsuario is required' });
     }
 
-    // Crear nueva partida en la base de datos - SIN especificar idPartida
+    // Verificar que el usuario existe
+    const [user] = await pool.query('SELECT idUsuario FROM usuarios WHERE idUsuario = ?', [idUsuario]);
+    if (user.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const [result] = await pool.query(
       'INSERT INTO partidas (juego, idUsuario, estado, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())',
       ['Triki', idUsuario]
     );
 
-    const idPartida = result.insertId; // Este es el ID autoincremental generado por MySQL
+    const idPartida = result.insertId;
 
-    // Crear la sala de juego
     const room = {
       player1: idUsuario,
       player1Ws: null,
@@ -124,8 +128,8 @@ app.post('/api/create-game', async (req, res) => {
 
     res.json({ idPartida });
   } catch (error) {
-    console.error('Error creating game:', error);
-    res.status(500).json({ error: 'Failed to create game' });
+    console.error('Error creating game:', error.message);
+    res.status(500).json({ error: 'Failed to create game', details: error.message });
   }
 });
 
@@ -140,7 +144,6 @@ wss.on('connection', (ws) => {
         const { idPartida, idUsuario } = data;
         let room = gameRooms.get(idPartida);
 
-        // Si la sala no existe, buscar en la base de datos
         if (!room) {
           const [partidas] = await pool.query(
             'SELECT * FROM partidas WHERE idPartida = ?',
@@ -165,30 +168,31 @@ wss.on('connection', (ws) => {
           gameRooms.set(idPartida, room);
         }
 
-        // Asignar WebSocket al jugador correspondiente
+        if (room.player2 && room.player1 !== idUsuario && room.player2 !== idUsuario) {
+          ws.send(JSON.stringify({ 
+            type: 'error', 
+            message: 'This game has already started with two players' 
+          }));
+          return;
+        }
+
         if (room.player1 === idUsuario) {
           room.player1Ws = ws;
         } else if (room.player2 === idUsuario) {
           room.player2Ws = ws;
         } else if (!room.player2) {
-          // Segundo jugador se une
           room.player2 = idUsuario;
           room.player2Ws = ws;
           room.status = 'playing';
 
-          // Actualizar base de datos
           await pool.query(
             'UPDATE partidas SET idAmigo = ?, updated_at = NOW() WHERE idPartida = ?',
             [idUsuario, idPartida]
           );
-        } else {
-          ws.send(JSON.stringify({ type: 'error', message: 'Game is full' }));
-          return;
         }
 
         await sendPlayerDataToRoom(room, idPartida);
 
-        // Enviar estado del juego
         if (room.status === 'playing') {
           const startMessage = JSON.stringify({
             type: 'start',
@@ -279,8 +283,6 @@ wss.on('connection', (ws) => {
           if (room.player2Ws && room.player2Ws.readyState === WebSocket.OPEN) {
             room.player2Ws.send(messageStr);
           }
-        } else {
-          console.warn('Invalid chat message or room not found:', { idPartida, message });
         }
       }
     } catch (error) {
@@ -296,7 +298,8 @@ wss.on('connection', (ws) => {
           const remainingPlayer = room.player1Ws === ws ? room.player2 : room.player1;
           const remainingWs = room.player1Ws === ws ? room.player2Ws : room.player1Ws;
 
-          if (room.status === 'playing') {
+          if (room.status === 'playing' && remainingPlayer) {
+            const winnerSymbol = remainingPlayer === room.player1 ? 'X' : 'O';
             await pool.query(
               'UPDATE partidas SET idGanador = ?, estado = 2, updated_at = NOW() WHERE idPartida = ?',
               [remainingPlayer, idPartida]
@@ -306,7 +309,7 @@ wss.on('connection', (ws) => {
               remainingWs.send(
                 JSON.stringify({
                   type: 'gameOver',
-                  winner: remainingPlayer === room.player1 ? 'X' : 'O',
+                  winner: winnerSymbol,
                   idGanador: remainingPlayer,
                   reason: 'opponent_disconnected',
                 })
