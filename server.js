@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const WebSocket = require('ws');
 const mysql = require('mysql2/promise');
-const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 
 const app = express();
@@ -93,47 +92,104 @@ async function sendPlayerDataToRoom(room, idPartida) {
   }
 }
 
+// API endpoint to create a new game
+app.post('/api/create-game', async (req, res) => {
+  try {
+    const { idUsuario } = req.body;
+    
+    if (!idUsuario) {
+      return res.status(400).json({ error: 'idUsuario is required' });
+    }
+
+    // Crear nueva partida en la base de datos - SIN especificar idPartida
+    const [result] = await pool.query(
+      'INSERT INTO partidas (juego, idUsuario, estado, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())',
+      ['Triki', idUsuario]
+    );
+
+    const idPartida = result.insertId; // Este es el ID autoincremental generado por MySQL
+
+    // Crear la sala de juego
+    const room = {
+      player1: idUsuario,
+      player1Ws: null,
+      player2: null,
+      player2Ws: null,
+      board: Array(9).fill(null),
+      isXNext: true,
+      status: 'waiting',
+    };
+    
+    gameRooms.set(idPartida, room);
+
+    res.json({ idPartida });
+  } catch (error) {
+    console.error('Error creating game:', error);
+    res.status(500).json({ error: 'Failed to create game' });
+  }
+});
+
 // Handle WebSocket connections
 wss.on('connection', (ws) => {
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
-      console.log('Received WebSocket message:', data); // Debug log
+      console.log('Received WebSocket message:', data);
 
       if (data.type === 'join') {
         const { idPartida, idUsuario } = data;
         let room = gameRooms.get(idPartida);
 
+        // Si la sala no existe, buscar en la base de datos
         if (!room) {
+          const [partidas] = await pool.query(
+            'SELECT * FROM partidas WHERE idPartida = ?',
+            [idPartida]
+          );
+
+          if (partidas.length === 0) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Game not found' }));
+            return;
+          }
+
+          const partida = partidas[0];
           room = {
-            player1: idUsuario,
-            player1Ws: ws,
-            player2: null,
+            player1: partida.idUsuario,
+            player1Ws: null,
+            player2: partida.idAmigo,
             player2Ws: null,
             board: Array(9).fill(null),
             isXNext: true,
-            status: 'waiting',
+            status: partida.estado === 1 ? (partida.idAmigo ? 'playing' : 'waiting') : 'finished',
           };
           gameRooms.set(idPartida, room);
+        }
 
-          await pool.query(
-            'INSERT INTO partidas (idPartida, juego, idUsuario, estado, created_at, updated_at) VALUES (?, ?, ?, 1, NOW(), NOW())',
-            [idPartida, 'Triki', idUsuario]
-          );
-
-          await sendPlayerDataToRoom(room, idPartida);
-        } else if (room.player1 !== idUsuario && !room.player2) {
+        // Asignar WebSocket al jugador correspondiente
+        if (room.player1 === idUsuario) {
+          room.player1Ws = ws;
+        } else if (room.player2 === idUsuario) {
+          room.player2Ws = ws;
+        } else if (!room.player2) {
+          // Segundo jugador se une
           room.player2 = idUsuario;
           room.player2Ws = ws;
           room.status = 'playing';
 
+          // Actualizar base de datos
           await pool.query(
             'UPDATE partidas SET idAmigo = ?, updated_at = NOW() WHERE idPartida = ?',
             [idUsuario, idPartida]
           );
+        } else {
+          ws.send(JSON.stringify({ type: 'error', message: 'Game is full' }));
+          return;
+        }
 
-          await sendPlayerDataToRoom(room, idPartida);
+        await sendPlayerDataToRoom(room, idPartida);
 
+        // Enviar estado del juego
+        if (room.status === 'playing') {
           const startMessage = JSON.stringify({
             type: 'start',
             board: room.board,
@@ -146,22 +202,6 @@ wss.on('connection', (ws) => {
           if (room.player2Ws && room.player2Ws.readyState === WebSocket.OPEN) {
             room.player2Ws.send(startMessage);
           }
-        } else if (room.player1 === idUsuario || room.player2 === idUsuario) {
-          if (room.player1 === idUsuario) {
-            room.player1Ws = ws;
-          } else {
-            room.player2Ws = ws;
-          }
-
-          await sendPlayerDataToRoom(room, idPartida);
-
-          const gameStateMessage = JSON.stringify({
-            type: room.status === 'playing' ? 'start' : 'waiting',
-            board: room.board,
-            isXNext: room.isXNext,
-          });
-
-          ws.send(gameStateMessage);
         }
       }
 
