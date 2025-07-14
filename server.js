@@ -98,18 +98,13 @@ async function sendPlayerDataToRoom(room, idPartida) {
 
 // Handle WebSocket connections
 wss.on('connection', (ws, req) => {
-  console.log('Nueva conexión WebSocket establecida');
-
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
-      console.log('Mensaje recibido:', data.type);
 
       if (data.type === 'join') {
         const { idPartida, idUsuario } = data;
         let room = gameRooms.get(idPartida);
-
-        console.log(`Usuario ${idUsuario} intentando unirse a partida ${idPartida}`);
 
         if (!room) {
           // Create new room if it doesn't exist
@@ -120,12 +115,9 @@ wss.on('connection', (ws, req) => {
             player2Ws: null,
             board: Array(9).fill(null),
             isXNext: true,
-            status: 'waiting',
-            messages: []
+            status: 'waiting'
           };
           gameRooms.set(idPartida, room);
-
-          console.log(`Nueva sala creada para partida ${idPartida}`);
 
           // Create partida in database
           await pool.query(
@@ -141,8 +133,6 @@ wss.on('connection', (ws, req) => {
           room.player2Ws = ws;
           room.status = 'playing';
 
-          console.log(`Usuario ${idUsuario} se unió como jugador 2`);
-
           // Update partida with idAmigo
           await pool.query(
             'UPDATE partidas SET idAmigo = ?, updated_at = NOW() WHERE idPartida = ?',
@@ -151,18 +141,6 @@ wss.on('connection', (ws, req) => {
 
           // Send updated player data to both players
           await sendPlayerDataToRoom(room, idPartida);
-
-          // Send previous messages to new player
-          if (room.messages.length > 0) {
-            room.messages.forEach(msg => {
-              if (room.player2Ws && room.player2Ws.readyState === WebSocket.OPEN) {
-                room.player2Ws.send(JSON.stringify({
-                  type: 'chat',
-                  message: msg
-                }));
-              }
-            });
-          }
 
           // Notify both players to start the game
           const startMessage = JSON.stringify({ 
@@ -179,8 +157,6 @@ wss.on('connection', (ws, req) => {
           }
         } else if (room.player1 === idUsuario || room.player2 === idUsuario) {
           // Player reconnecting
-          console.log(`Usuario ${idUsuario} reconectándose`);
-          
           if (room.player1 === idUsuario) {
             room.player1Ws = ws;
           } else {
@@ -189,18 +165,6 @@ wss.on('connection', (ws, req) => {
           
           // Send current player data and game state
           await sendPlayerDataToRoom(room, idPartida);
-          
-          // Send previous messages to reconnected player
-          if (room.messages.length > 0) {
-            room.messages.forEach(msg => {
-              if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: 'chat',
-                  message: msg
-                }));
-              }
-            });
-          }
           
           const gameStateMessage = JSON.stringify({
             type: room.status === 'playing' ? 'start' : 'waiting',
@@ -223,8 +187,6 @@ wss.on('connection', (ws, req) => {
           room.board[index] = room.isXNext ? 'X' : 'O';
           room.isXNext = !room.isXNext;
 
-          console.log(`Movimiento realizado en posición ${index} por usuario ${idUsuario}`);
-
           // Broadcast move to both players
           const moveMessage = JSON.stringify({ 
             type: 'move', 
@@ -244,8 +206,6 @@ wss.on('connection', (ws, req) => {
           if (winner || !room.board.includes(null)) {
             room.status = 'finished';
             const idGanador = winner ? (winner === 'X' ? room.player1 : room.player2) : null;
-            
-            console.log(`Juego terminado. Ganador: ${idGanador}`);
             
             // Update database
             await pool.query(
@@ -270,21 +230,19 @@ wss.on('connection', (ws, req) => {
       }
 
       if (data.type === 'chat') {
-        const { idPartida, message } = data;
+        const { idPartida, message, user } = data;
         const room = gameRooms.get(idPartida);
-        
         if (room) {
-          // Store message in room's message history
-          room.messages.push(message);
-          
-          console.log(`Mensaje de chat de ${message.user}: ${message.text}`);
-          
+          const chatMessage = { 
+            user: user, 
+            text: message, 
+            timestamp: new Date().toISOString() 
+          };
           const messageStr = JSON.stringify({ 
             type: 'chat', 
-            message: message 
+            message: chatMessage 
           });
           
-          // Send to both players
           if (room.player1Ws && room.player1Ws.readyState === WebSocket.OPEN) {
             room.player1Ws.send(messageStr);
           }
@@ -294,13 +252,11 @@ wss.on('connection', (ws, req) => {
         }
       }
     } catch (error) {
-      console.error('Error en mensaje WebSocket:', error.message);
+      console.error('WebSocket message error:', error.message);
     }
   });
 
   ws.on('close', async () => {
-    console.log('Conexión WebSocket cerrada');
-    
     try {
       for (const [idPartida, room] of gameRooms) {
         if (room.player1Ws === ws || room.player2Ws === ws) {
@@ -308,9 +264,7 @@ wss.on('connection', (ws, req) => {
           const remainingPlayer = room.player1Ws === ws ? room.player2 : room.player1;
           const remainingWs = room.player1Ws === ws ? room.player2Ws : room.player1Ws;
           
-          console.log(`Usuario ${disconnectedPlayer} desconectado de partida ${idPartida}`);
-          
-          if (room.status === 'playing' && remainingPlayer) {
+          if (room.status === 'playing') {
             // Update database with winner (the remaining player)
             await pool.query(
               'UPDATE partidas SET idGanador = ?, estado = 2, updated_at = NOW() WHERE idPartida = ?',
@@ -327,39 +281,13 @@ wss.on('connection', (ws, req) => {
               }));
             }
           }
-          
-          // Don't delete the room immediately, keep it for potential reconnection
-          // Only delete if both players are disconnected
-          if (room.player1Ws === ws) {
-            room.player1Ws = null;
-          }
-          if (room.player2Ws === ws) {
-            room.player2Ws = null;
-          }
-          
-          // If both players are disconnected, clean up the room after a timeout
-          if (!room.player1Ws && !room.player2Ws) {
-            setTimeout(() => {
-              if (gameRooms.has(idPartida)) {
-                const currentRoom = gameRooms.get(idPartida);
-                if (!currentRoom.player1Ws && !currentRoom.player2Ws) {
-                  gameRooms.delete(idPartida);
-                  console.log(`Sala ${idPartida} eliminada por inactividad`);
-                }
-              }
-            }, 30000); // 30 seconds timeout
-          }
-          
+          gameRooms.delete(idPartida);
           break;
         }
       }
     } catch (error) {
-      console.error('Error en cierre de WebSocket:', error.message);
+      console.error('WebSocket close error:', error.message);
     }
-  });
-
-  ws.on('error', (error) => {
-    console.error('Error en WebSocket:', error);
   });
 });
 
@@ -378,24 +306,7 @@ function calculateWinner(board) {
   return null;
 }
 
-// API endpoint para obtener información de partidas (opcional)
-app.get('/api/partidas/:idUsuario', async (req, res) => {
-  try {
-    const { idUsuario } = req.params;
-    const [partidas] = await pool.query(
-      'SELECT * FROM partidas WHERE idUsuario = ? OR idAmigo = ? ORDER BY created_at DESC',
-      [idUsuario, idUsuario]
-    );
-    res.json(partidas);
-  } catch (error) {
-    console.error('Error obteniendo partidas:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
 // Start server
 app.listen(port, () => {
-  console.log(`Servidor HTTP ejecutándose en http://localhost:${port}`);
+  console.log(`Server running on http://localhost:${port}`);
 });
-
-console.log('Servidor WebSocket ejecutándose en ws://localhost:3002');
