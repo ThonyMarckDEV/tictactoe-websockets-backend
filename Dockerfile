@@ -1,20 +1,21 @@
-# Usamos Node.js versión 23.9.0 en su variante alpine para un contenedor liviano
+# Imagen base ligera con Node.js
 FROM node:23.9.0-alpine
 
-# Establece el directorio de trabajo en el contenedor
+# Establecer directorio de trabajo
 WORKDIR /app
 
-# Copia los archivos de dependencias
+# Copiar dependencias
 COPY package*.json ./
 
-# Instala las dependencias
+# Instalar dependencias
 RUN npm install
 
-# Copia el resto del código de la aplicación
+# Copiar el resto del código
 COPY . .
 
-# Expone el puerto en el que se ejecuta el servidor (ajusta si es necesario)
-EXPOSE 5000
+# Exponer los puertos necesarios
+EXPOSE 8008
+EXPOSE 8009
 
-# Ejecuta el servidor usando node server.js
+# Ejecutar la app
 CMD ["node", "server.js"]

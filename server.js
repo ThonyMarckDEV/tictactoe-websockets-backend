@@ -8,15 +8,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const port = process.env.PORT || 3001;
+const gameRooms = new Map();
+
+const port = process.env.PORT;
 
 // Database connection pool
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || '127.0.0.1',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'safemedb',
-  port: process.env.DB_PORT || 3306,
+  host: process.env.DB_HOST ,
+  user: process.env.DB_USER ,
+  password: process.env.DB_PASSWORD ,
+  database: process.env.DB_NAME ,
+  port: process.env.DB_PORT ,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -36,10 +38,8 @@ async function testDbConnection() {
 testDbConnection();
 
 // WebSocket server
-const wss = new WebSocket.Server({ port: 3002 });
-
-// Store active game rooms and their WebSocket clients
-const gameRooms = new Map();
+const ws_port = process.env.WS_PORT;
+const wss = new WebSocket.Server({ port: ws_port });
 
 // Function to get player data from database
 async function getPlayerData(idUsuario) {
@@ -446,5 +446,5 @@ function calculateWinner(board) {
 // Start server
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
-  console.log(`WebSocket server running on ws://localhost:3002`);
+  console.log(`WebSocket server running on ws://localhost:${ws_port}`);
 });
